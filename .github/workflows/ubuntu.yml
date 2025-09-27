@@ -1,0 +1,85 @@
+name: Build firefox on Ubuntu
+on:
+  workflow_dispatch:
+  
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+  
+jobs:
+  build_phase_1:
+    env:
+      GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+    runs-on: ubuntu-latest
+    steps:
+    - name: Update components
+      run: |
+        sudo timedatectl set-timezone Asia/Manila
+        sudo dpkg --add-architecture i386
+        sudo sed -i 's|http://azure.|http://|g' /etc/apt/apt-mirrors.txt
+        sudo sed -i 's|http://azure.|http://|g' /etc/apt/sources.list
+        sudo chmod 0644 /boot/vmlinuz*
+        sudo chmod +r /boot/vmlinuz-*
+        sudo apt-get update && sudo apt-get install curl python3 python3-pip mercurial gcc-multilib g++-multilib libgtk-3-0 libasound2:i386 libgtk2.0-dev:i386 libgtk-3-dev:i386 libpango1.0-dev:i386 libxt-dev:i386 libx11-xcb-dev:i386 libpulse-dev:i386 libdrm-dev:i386
+        source /etc/os-release
+        
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+        ref: ${{ github.head_ref }}
+
+    - name: Install Mercurial
+      run: |
+        python -m pip install --upgrade pip
+        python3 -m pip install --user mercurial
+        hg version
+        echo 'export PATH="'"$(python3 -m site --user-base)"'/bin:$PATH"' >> ~/.bashrc
+
+    - name: Cache build/
+      id: cache-build
+      uses: actions/cache@v4
+      with:
+        path: .hg
+        key: ${{ runner.os }}-mozbuild-package-${{ hashFiles('**/bootstrap.py') }}
+        restore-keys: |
+            ${{ runner.os }}-mozbuild-package-${{ hashFiles('**/bootstrap.py') }}
+
+    - name: Bootstrap a copy of the Firefox source code
+      run: |
+        cd ..
+        rm -rf mozilla-unified
+        curl https://hg.mozilla.org/mozilla-central/raw-file/default/python/mozboot/bin/bootstrap.py -O
+        python3 bootstrap.py --no-interactive --application-choice browser
+        ls -alh
+
+    - name: Setup Node.js environment
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        check-latest: true
+        token: ${{ env.GH_TOKEN }}
+        cache: 'npm'
+        cache-dependency-path: ./package-lock.json
+
+    - name: Commit
+      run: |
+        echo List file 1/2
+        ls -alh
+        7z a -t7z "tmp.7z" -r "../../mozilla-unified" -x!*.git -m0=lzma2 -mx9 -mmt
+        cd mozilla-unified
+        rm -rf mozilla-unified/
+        7z x "tmp.7z" -O".."
+        rm -f tmp.7z
+        cd mozilla-unified
+        echo List file 2/2
+        ls -alh
+        git init -b master
+        git init && git symbolic-ref HEAD refs/heads/master
+        git remote add origin https://${{ env.GH_TOKEN }}@github.com/${{ github.repository }}.git
+        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add .
+        git commit -m "Upload from vm"
+        git push -f https://${{ env.GH_TOKEN }}@github.com/${{ github.repository }}.git
+      shell: bash

@@ -1,0 +1,91 @@
+name: Build firefox on Windows
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_firefox:
+    env:
+      GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+    runs-on: windows-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+        ref: ${{ github.head_ref }}
+        
+    - name: Setup-msbuild
+      uses: microsoft/setup-msbuild@v2
+      with:
+        msbuild-architecture: x64
+        
+    - name: Setup MSVC environment
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: amd64
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        token: ${{ env.GH_TOKEN }}
+
+    - name: Setup Node.js environment
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        check-latest: true
+        token: ${{ env.GH_TOKEN }}
+        
+    - name: Cache
+      uses: actions/cache@v4
+      with:
+        path: mozilla-source
+        key: ${{ runner.os }}-mozbuild-package
+        restore-keys: |
+            ${{ runner.os }}-mozbuild-package
+
+    - name: Setup MozillaBuild
+      run: |
+        curl -L https://ftp.mozilla.org/pub/mozilla/libraries/win32/MozillaBuildSetup-Latest.exe --output MozillaBuildSetup-Latest.exe
+        start /WAIT MozillaBuildSetup-Latest.exe /S
+        erase /F MozillaBuildSetup-Latest.exe
+        python3 -m pip install --user mercurial
+        hg version
+      shell: cmd
+
+    - name: Add mercurial to PATH
+      run: |
+        echo 'export PATH="'"$(python3 -m site --user-base)"'/bin:$PATH"' >> ~/.bashrc
+      shell: bash
+
+    - name: Start bootstrapper
+      run: |
+        mkdir mozilla-source
+        cd mozilla-source
+        curl https://hg.mozilla.org/mozilla-central/raw-file/default/python/mozboot/bin/bootstrap.py -O
+        python3 bootstrap.py --no-interactive --application-choice browser
+        cd mozilla-unified
+        hg up -C central
+      shell: cmd
+      
+    - name: Create installers
+      run: |
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        cd .\mozilla-source\
+        cd .\mozilla-unified\
+        ./mach build --no-interactive
+        ./mach package --no-interactive
+        ./mach installer --no-interactive
+      shell: powershell
+      
+    - name: List files
+      run: |
+        cd mozilla-source
+        cd mozilla-unified
+        ls -alh
+      shell: bash
